@@ -1,5 +1,13 @@
 import sys
-sys.path.append('../')
+from pathlib import Path
+
+# Ensure project root is on sys.path so `from src...` imports work when running tests
+# This makes the import robust to being executed from the test folder or the project root.
+project_root = Path(__file__).resolve().parents[1]
+project_root_str = str(project_root)
+if project_root_str not in sys.path:
+    sys.path.insert(0, project_root_str)
+
 from src.Hive import Hive
 from src.IO2 import RLE
 from src.EyerissF import EyerissF as EF
@@ -13,10 +21,11 @@ net = LeNet5()
 
 for i, (name, param) in enumerate(net.named_parameters()):
     print(name)
-    data = np.load("../filter/"+name+".npy")
+    data = np.load(str(project_root / 'filter' / (name + '.npy')))
     param.data = torch.from_numpy(data)
 net.eval()
-dir_name = "../mnist_png/mnist_png/training/5"
+# Use project-root based paths so the script works regardless of working directory
+dir_name = str(project_root / 'mnist_png' / 'mnist_png' / 'training' / '5')
 #dir_name = "mnist_png/mnist_png/one_pic"
 files = os.listdir(dir_name)
 batch_size = 4
@@ -35,7 +44,7 @@ for f in range(0, len(files), batch_size):
     inputs=torch.tensor(pics,dtype=torch.float32)
     
   
-    flts = np.load("../filter/convnet.c1.weight.npy")
+    flts = np.load(str(project_root / 'filter' / 'convnet.c1.weight.npy'))
     pics = r.Compress(pics)
     flts = r.Compress(flts)
     pics= hive.Conv2d(pics,flts)
@@ -47,7 +56,7 @@ for f in range(0, len(files), batch_size):
     pics = hive.ReLU(pics)
     pics=hive.Pooling(pics)
     
-    flts = np.float16(np.load("../filter/convnet.c3.weight.npy"))
+    flts = np.float16(np.load(str(project_root / 'filter' / 'convnet.c3.weight.npy')))
     flts = r.Compress(flts)
     pics = r.Compress(pics)
     #print('pic', pics.shape,'flt', flts.shape)
@@ -61,12 +70,12 @@ for f in range(0, len(files), batch_size):
     pics=hive.Pooling(pics)
     
     
-    
+
     
     
     #print('after pooling pic', pics.shape)
     
-    flts = np.float16(np.float16(np.load("../filter/convnet.c5.weight.npy")))
+    flts = np.float16(np.float16(np.load(str(project_root / 'filter' / 'convnet.c5.weight.npy'))))
     flts = r.Compress(flts)
     pics = r.Compress(pics)
     #print('pic', pics.shape,'flt', flts.shape)
@@ -92,10 +101,10 @@ for f in range(0, len(files), batch_size):
     
     
     vector = pics.reshape(batch_size, -1)
-    vector = hive.FullConnect(vector, np.load('../filter/fc.f6.weight.npy'))
+    vector = hive.FullConnect(vector, np.load(str(project_root / 'filter' / 'fc.f6.weight.npy')))
     vector = hive.ReLU(vector)
     #vector = vector+np.float16(np.load("filter/fc.f6.bias.npy"))
-    vector = hive.FullConnect(vector, np.load('../filter/fc.f7.weight.npy'))
+    vector = hive.FullConnect(vector, np.load(str(project_root / 'filter' / 'fc.f7.weight.npy')))
     #vector = vector+np.float16(np.load("filter/fc.f7.bias.npy"))
 
     print("this number is : ",vector.argmax(axis = 1))

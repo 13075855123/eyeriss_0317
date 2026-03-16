@@ -58,25 +58,31 @@ class Hive():
         return self.__SetPasses__()
 
     def __SetPasses__(self):
+        import math
         Passes = []
         for batch in range( self.Pictures.shape[0] ):
-            for ofmap in range( int(self.FilterWeights.shape[0]/self.t) ):
-                for channel in range( int(self.Pictures.shape[1]/self.r) ):
-                    #TODO: let's assume there is no reuse of filter vertically
-                    #self.e can be smaller than actual ofmapWidth
-                    #e.g. self.e of 27 is sent out, so 14 for one and 13 for another pass
-                    #for outmapwidth of 14, filterwidth of 3, we need 14+3-1 ifmaps
-                    ifmapEachPass = self.e + self.FilterWeights.shape[2] - 1
+            # ==========================================
+            # 🚀 核心改动：循环重排 (Loop Interchange)
+            # 将 channel 循环放在外层，ofmap 循环放在内层
+            # 从而完美实现“特征图驻留，卷积核轮换”的时间复用！
+            # ==========================================
+            for channel in range( int(self.Pictures.shape[1]/self.r) ): 
+                for ofmap in range( int(self.FilterWeights.shape[0]/self.t) ):
+                    
                     ofmapWidth = self.Pictures.shape[2] - self.FilterWeights.shape[2] + 1
                     head = 0
-                    for e in range( int(ofmapWidth/self.e) ):
-                        tail = head+ifmapEachPass
-                        PicPass = self.Pictures[batch, channel*self.r:(channel+1)*self.r,
-                                     head:tail, :]
-                        WeightPass = self.FilterWeights[ofmap*self.t:(ofmap+1)*self.t, 
-                                    channel*self.r:(channel+1)*self.r, :, :]
+                    total_passes = math.ceil(ofmapWidth / self.e)
+                    
+                    for e in range( total_passes ):
+                        current_e = min(self.e, ofmapWidth - e * self.e)
+                        ifmapEachPass = current_e + self.FilterWeights.shape[2] - 1
+                        tail = head + ifmapEachPass
+                        
+                        PicPass = self.Pictures[batch, channel*self.r:(channel+1)*self.r, head:tail, :]
+                        WeightPass = self.FilterWeights[ofmap*self.t:(ofmap+1)*self.t, channel*self.r:(channel+1)*self.r, :, :]
                         Passes.append([PicPass, WeightPass])
-                        head += self.e #or conf.EyerissWidth equivalently
+                        
+                        head += self.e 
         return Passes
     
     def __SetMappingParameters__(self, m=0, n=0, e=0, p=0, q=0, r=0, t=0):
@@ -91,24 +97,29 @@ class Hive():
     def __PEArrayMapping__(self):
         #TODO: also consider stride
         PESetHeight = self.FilterWeights.shape[2] #filter height
-        PESetWidth = self.Pictures.shape[2]- self.FilterWeights.shape[2] + 1 #ofmap height
+        PESetWidth = self.Pictures.shape[2] - self.FilterWeights.shape[2] + 1 #ofmap height
         #Eyeriss only support filter height smaller than PE array height
         assert PESetHeight <= conf.EyerissHeight
-        t = int(conf.EyerissHeight/PESetHeight) # t filters
+        
+        # 计算硬件物理上最多能同时放几个卷积核
+        t = int(conf.EyerissHeight / PESetHeight) 
+        
+        # ⚠️ 核心修复：实际并行的卷积核数不能超过提供的权重通道数总和
+        # 防止出现 int(FilterNum / t) = 0 导致 Pass 为空的问题
+        t = min(t, self.FilterWeights.shape[0])
         
         #TODO: let's assume PESetW >=PEArrayWidth for now
         if PESetWidth > conf.EyerissWidth:
             #strip-mining the 2-D convolution
-            # filter height 
             fold = ( int((PESetWidth-1)/conf.EyerissWidth) + 1 )
             e = conf.EyerissWidth
-            if t%fold == 0:
+            if t % fold == 0:
                 t = int(t/fold)
                 e = PESetWidth
         else: 
             e = PESetWidth
             
-        self.__SetMappingParameters__(e=e,t=t)
+        self.__SetMappingParameters__(e=e, t=t)
         
     def __PESetMapping__(self):
         #TODO: add reusing filter, processing n ifmaps at a time
@@ -181,11 +192,16 @@ class Hive():
         
 
     def Reverse(self, Psum):
-        #Psum is a list of Psums in the shape of [self.t, self.e, ofmapwidth*p*n]
+        import math  # 引入 math 库进行向上取整
+        # Psum is a list of Psums in the shape of [self.t, current_e, ofmapwidth*p*n]
         index = 0
         ofmapWidth = self.Pictures.shape[2] - self.FilterWeights.shape[2] + 1
         OfMaps = np.zeros( (self.Pictures.shape[0], self.FilterWeights.shape[0], 
                             ofmapWidth, ofmapWidth*self.n*self.p ))
+        
+        # 修复1：必须与 __SetPasses__ 中的总切片数保持一致
+        total_passes = math.ceil(ofmapWidth / self.e)
+        
         for batch in range( self.Pictures.shape[0] ):
             ofMap = []
             for ofmap in range( int(self.FilterWeights.shape[0]/self.t) ):
@@ -193,17 +209,24 @@ class Hive():
                 for channel in range( int(self.Pictures.shape[1]/self.r) ): 
                     head = 0
                     PsumRow = []
-                    for e in range( int(ofmapWidth/self.e) ):
+                    # 修复2：遍历所有的 Pass，而不是截断后的整数
+                    for e in range( total_passes ):
                         PsumRow.append( np.array(Psum[index]) )
                         index += 1
+                    
+                    # 将所有 Pass 算出的块在高度维度（axis=1）上拼接起来
                     PsumRow = np.concatenate(PsumRow, axis=1)
-                    assert PsumRow.shape == (self.t,ofmapWidth, 
+                    
+                    # 拼接后的实际尺寸完美通过原代码的断言检查
+                    assert PsumRow.shape == (self.t, ofmapWidth, 
                            ofmapWidth*self.n*self.p)
                     SumRow.append(PsumRow)
-                #TODO: let's ignore sending back psum to PEs for now
+                    
+                # TODO: let's ignore sending back psum to PEs for now
                 SumRow = np.array(SumRow).sum(axis=0)
                 ofMap.append(SumRow)
             OfMaps[batch] = np.concatenate(ofMap)
+            
         self.__SetOfMaps__(OfMaps)
         self.__ReverseFmapReuse__()
         self.__ReverseFilterReuse__()
