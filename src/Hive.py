@@ -31,16 +31,26 @@ class Hive():
     def PostProcess(self, OfMaps):
         return self.RLE.Compress(OfMaps)
         
-    # 🌟 修改：接受 stride 参数
-    def Conv2d(self, Pictures=0, FilterWeights=0, stride=1):
+    # 🌟 修改：接受 stride 和 padding 参数
+    def Conv2d(self, Pictures=0, FilterWeights=0, stride=1, padding=0):
         self.stride = stride
         Pictures, FilterWeights = self.PreProcess(Pictures, FilterWeights)
+        
+        # 🌟 新增：Padding 填充逻辑
+        if padding > 0:
+            # np.pad 格式：((Batch前后), (Channel前后), (Height前后), (Width前后))
+            # 我们只在图片的高度(axis=2)和宽度(axis=3)维度进行填充
+            Pictures = np.pad(Pictures, 
+                              ((0, 0), (0, 0), (padding, padding), (padding, padding)), 
+                              mode='constant', constant_values=0)
+                              
+        # 注意：这里传入的 Pictures 如果被 pad 过，已经是全新的 shape 了
         Passes = self.CreatePasses(Pictures, FilterWeights)
         
-        # 🌟 修改：使用形状的宽度维度 [3] 及 stride 来计算输出特征图的宽度
+        # 🌟 修改：此时 Pictures.shape[3] 已经是包含 padding 的宽度
         ofmapWidth = (Pictures.shape[3] - FilterWeights.shape[3]) // self.stride + 1
         
-        # 🌟 修改：向 EyerissF.Conv2d 传递 stride
+        # 向 EyerissF.Conv2d 传递 stride
         Psum = [self.EyerissF.Conv2d(ps, ofmapWidth, self.n, self.p, self.q, stride=self.stride) for ps in Passes]
         self.Reverse(Psum)
         OfMaps = self.Output()
@@ -49,8 +59,10 @@ class Hive():
     def ReLU(self, array):
         return Activiation.ReLU(array)
 
-    def Pooling(self, array):
-        return Pooling.Pooling(array)
+    # 在 src/Hive.py 中找到 Pooling 方法并替换：
+    def Pooling(self, array, kernel_size, stride):
+        # 将参数原封不动地传递给底层的 Pooling.py
+        return Pooling.Pooling(array, kernel_size=kernel_size, stride=stride)
             
     def FullConnect(self, v1, v2, activation=1):
         return np.array(np.dot(v1, v2.T) / activation, dtype=int)
@@ -126,26 +138,43 @@ class Hive():
             
         self.__SetMappingParameters__(e=e, t=t)
         
-    def __PESetMapping__(self):
-        #TODO: add reusing filter, processing n ifmaps at a time
-        slidingWindow = self.FilterWeights.shape[2]
-        qMax = int(conf.IfmapSpad/(slidingWindow*self.n))
-        q=qMax
-        for q in range(qMax,0,-1):
-            if self.FilterWeights.shape[1]%q == 0:
-                break
-        pMax = min(int(conf.PsumSpad/self.n), int(conf.FilterSpad/
-                (q*slidingWindow)))
-        # sometimes we don't need large p at PE level 
-        # since PE array already reused it
-        pMax = min(pMax, int(self.FilterWeights.shape[0]/self.t))  
-        p=pMax
-        for p in range(pMax,0,-1):
-            if self.FilterWeights.shape[0]%p == 0:
-                break
-        m = self.FilterWeights.shape[0]/(self.r*q)
-        self.__SetMappingParameters__(q=q,p=p)
+    # def __PESetMapping__(self):
         
+    #     #TODO: add reusing filter, processing n ifmaps at a time
+    #     slidingWindow = self.FilterWeights.shape[2]
+    #     qMax = int(conf.IfmapSpad/(slidingWindow*self.n))
+    #     q=qMax
+    #     for q in range(qMax,0,-1):
+    #         if self.FilterWeights.shape[1]%q == 0:
+    #             break
+    #     pMax = min(int(conf.PsumSpad/self.n), int(conf.FilterSpad/
+    #             (q*slidingWindow)))
+    #     # sometimes we don't need large p at PE level 
+    #     # since PE array already reused it
+    #     pMax = min(pMax, int(self.FilterWeights.shape[0]/self.t))  
+    #     p=pMax
+    #     for p in range(pMax,0,-1):
+    #         if self.FilterWeights.shape[0]%p == 0:
+    #             break
+    #     m = self.FilterWeights.shape[0]/(self.r*q)
+    #     self.__SetMappingParameters__(q=q,p=p)
+        
+    #     self.__FilterReuse__()
+    #     self.__FmapReuse__()
+    #     self.__ChannelAccumulation__()
+
+    def __PESetMapping__(self):
+        # 🌟 修改：不再根据 SPAD 容量动态计算 pMax 和 qMax 进行强制打包。
+        # 强制将 Channel 累加因子(q) 和 Filter 重用因子(p) 设置为 1，保持 Pass 原始的物理尺寸。
+        q = 1
+        p = 1
+        
+        # 更新类内部的映射参数
+        self.__SetMappingParameters__(q=q, p=p)
+        
+        # 因为我们强制了 p=1 且 n=1, q=1，
+        # 下面这三个重用函数内部的 if 条件 (如 if self.q > 1) 均不会满足，
+        # 因此不会再对 Pictures 和 FilterWeights 沿着宽度轴进行强制拼接。
         self.__FilterReuse__()
         self.__FmapReuse__()
         self.__ChannelAccumulation__()
@@ -198,9 +227,16 @@ class Hive():
 
     def Reverse(self, Psum):
         import math
-        # 🌟 修改：分别计算输出特征图的高度和宽度
+        
+        # 🌟 修复：此时 self.Pictures 和 self.FilterWeights 的宽度(shape[3])
+        # 已经被底层的映射逻辑(__ChannelAccumulation__, __FmapReuse__等)
+        # 乘以了重用因子 n, p, q。所以需要除以它们还原真实的宽度！
+        original_pic_w = self.Pictures.shape[3] // (self.n * self.q)
+        original_flt_w = self.FilterWeights.shape[3] // (self.p * self.q)
+        
+        # 🌟 修改：使用还原后的真实宽度来计算输出特征图的尺寸
         ofmapHeight = (self.Pictures.shape[2] - self.FilterWeights.shape[2]) // self.stride + 1
-        ofmapWidth = (self.Pictures.shape[3] - self.FilterWeights.shape[3]) // self.stride + 1
+        ofmapWidth = (original_pic_w - original_flt_w) // self.stride + 1
         
         # 预分配完整的输出矩阵，注意传入高度和宽度
         OfMaps = np.zeros((self.Pictures.shape[0], self.FilterWeights.shape[0], 

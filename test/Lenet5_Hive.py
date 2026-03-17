@@ -54,7 +54,8 @@ for f in range(0, len(files), batch_size):
     #pics = np.swapaxes(pics,1,3)
     pics = hive.PreProcess(pics)
     pics = hive.ReLU(pics)
-    pics=hive.Pooling(pics)
+    # AlexNet 的池化层是 3x3 窗口，步长为 2 (重叠池化)
+    pics_out = hive.Pooling(pics, kernel_size=3, stride=2)
     
     flts = np.float16(np.load(str(project_root / 'filter' / 'convnet.c3.weight.npy')))
     flts = r.Compress(flts)
@@ -67,7 +68,8 @@ for f in range(0, len(files), batch_size):
     #pics = Extension.NumpyAddExtension(hive.Decompress(r)) 
     pics = hive.PreProcess(pics)
     pics = hive.ReLU(pics)
-    pics=hive.Pooling(pics)
+    # AlexNet 的池化层是 3x3 窗口，步长为 2 (重叠池化)
+    pics_out = hive.Pooling(pics, kernel_size=3, stride=2)
     
     
 

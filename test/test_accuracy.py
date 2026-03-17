@@ -19,11 +19,11 @@ from src import conf
 
 def run_pass_analysis():
 
-    # --- 强行覆盖默认的缓存配置 ---
-    conf.IfmapSpad = 3   # 迫使 q = 3
-    conf.FilterSpad = 3  # 迫使 p = 3
-    conf.PsumSpad = 1
-    # -----------------------------
+    # # --- 强行覆盖默认的缓存配置 ---
+    # conf.IfmapSpad = 3   # 迫使 q = 3
+    # conf.FilterSpad = 3  # 迫使 p = 3
+    # conf.PsumSpad = 1
+    # # -----------------------------
     
     print(">>> 1. 初始化模拟环境...")
     eyeriss = EyerissF()
@@ -42,7 +42,7 @@ def run_pass_analysis():
     KERNEL_H, KERNEL_W = 3, 3
 
     # 定义测试的步长
-    STRIDE = 2
+    STRIDE = 1
     
 
     print(f">>> 2. 生成随机数据...")
@@ -92,7 +92,7 @@ def run_pass_analysis():
     # ==========================================
     # Eyeriss Simulator (Hive) 计算
     # ==========================================
-    print("\n>>> 5. 使用 EyerissSimulator 计算卷积 (这可能需要几秒到几十秒)...")
+    print("\n>>> 5. 使用 EyerissSimulator 计算卷积...")
     
     comp_pic = hive.RLE.Compress(pictures)
     comp_weight = hive.RLE.Compress(weights)
