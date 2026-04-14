@@ -4,8 +4,8 @@ GLB = 108
 # Local Buffer
 PEBuffer = 0.5
 
-EyerissWidth = 14
-EyerissHeight = 12
+EyerissWidth = 8
+EyerissHeight = 8
 
 IfmapSpad=12
 FilterSpad=224

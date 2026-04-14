@@ -33,13 +33,13 @@ def run_pass_analysis():
     # 定义卷积层配置
     # ==========================================
     # 输入: Batch=3, Channel=32, Height=28, Width=28
-    BATCH = 3
-    IN_CHANNELS = 32
-    INPUT_H, INPUT_W = 28, 28
+    BATCH = 4
+    IN_CHANNELS = 1
+    INPUT_H, INPUT_W = 32, 32
     
     # 权重: OutChannel=64, InChannel=32, Kernel=3x3
-    OUT_CHANNELS = 64
-    KERNEL_H, KERNEL_W = 3, 3
+    OUT_CHANNELS = 6
+    KERNEL_H, KERNEL_W = 5, 5
 
     # 定义测试的步长
     STRIDE = 1
